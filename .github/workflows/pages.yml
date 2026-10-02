@@ -1,0 +1,106 @@
+# Builds the MARSAM preview and deploys it to this repository's GitHub Pages site.
+# Output is a development preview (noindex, publicationAuthorized:false), not a formal release.
+name: Deploy MARSAM preview to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'package.json'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE_PATH: /MARSAM/
+      PAGES_PREVIEW: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build and test the site for the /MARSAM/ subpath
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p verification
+          npm run check 2>&1 | tee verification/pages-build.log
+      - name: Bind preview artifact to the source commit
+        run: |
+          node --input-type=module <<'JS'
+          import {readFile,writeFile} from 'node:fs/promises';
+          const path='dist/build-manifest.json';
+          const m=JSON.parse(await readFile(path,'utf8'));
+          if(m.base!=='/MARSAM/'||m.mode!=='preview'||m.publicationAuthorized!==false||m.previewDeploymentAuthorized!==true)
+            throw Error('Only the explicitly authorized preview can be deployed');
+          m.deploymentCommit=process.env.GITHUB_SHA;
+          await writeFile(path,JSON.stringify(m,null,2));
+          JS
+      - name: Upload generated site only
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+      - name: Preserve test receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: marsam-pages-evidence
+          path: verification
+          retention-days: 14
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - name: Deploy the tested preview
+        uses: actions/deploy-pages@v4
+        id: deployment
+      - name: Verify the public URL matches the deployed commit
+        env:
+          PREVIEW_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          node --input-type=module <<'JS'
+          const root=process.env.PREVIEW_URL;
+          if(!root||!root.startsWith('https://'))throw Error('No HTTPS deployment URL returned');
+          const base=root.endsWith('/')?root:root+'/';
+          const get=async(p)=>{const r=await fetch(new URL(p,base),{signal:AbortSignal.timeout(30000),cache:'no-store'});if(!r.ok)throw Error(p+' HTTP '+r.status);return r;};
+          let m;
+          for(let i=0;i<12;i++){
+            try{m=await(await get('build-manifest.json?c='+process.env.GITHUB_SHA)).json();if(m.deploymentCommit===process.env.GITHUB_SHA)break;}catch(e){if(i===11)throw e;}
+            await new Promise(r=>setTimeout(r,5000));
+          }
+          if(m?.deploymentCommit!==process.env.GITHUB_SHA)throw Error('Public site does not match the deployed commit');
+          for(const l of m.locales){const html=await(await get(l+'/')).text();if(!html.includes('noindex'))throw Error('noindex missing '+l);}
+          console.log(JSON.stringify({publicUrl:base,commit:m.deploymentCommit,locales:m.locales.length,publicPreview:true,formalInstitutionalApproval:false}));
+          JS
+      - name: Record the public preview URL
+        run: |
+          echo '## MARSAM public development preview' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.deployment.outputs.page_url }}tr/" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Live HTML and manifest were verified after deployment. This is a draft, not formal institutional approval.' >> "$GITHUB_STEP_SUMMARY"
