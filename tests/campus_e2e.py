@@ -49,12 +49,12 @@ try:
             ids=[]
             for i in range(4):
                 ids.append(buttons.nth(i).get_attribute('data-compare-id'));buttons.nth(i).click()
-            ck(f'four IDs selected {l}',page.locator('[data-compare-count]').inner_text()=='4')
+            ck(f'four IDs selected {l}',page.locator('[data-compare-count]').first.inner_text()=='4')
             buttons.nth(4).click()
             ck(f'fifth ID rejected {l}',buttons.nth(4).get_attribute('aria-pressed')=='false')
             page.reload(wait_until='networkidle')
-            ck(f'comparison persists {l}',page.locator('[data-compare-count]').inner_text()=='4')
-            page.locator('[data-compare-nav]').click();page.wait_for_selector('.comparison-table')
+            ck(f'comparison persists {l}',page.locator('[data-compare-count]').first.inner_text()=='4')
+            page.locator('[data-compare-nav]').first.click();page.wait_for_selector('.comparison-table')
             ck(f'four real source columns {l}',page.locator('.comparison-table thead th').count()==5)
             ck(f'comparison query binding {l}',all(x in page.url for x in ids))
             ck(f'bibliography is LTR {l}',page.locator('.comparison-table td[dir="ltr"]').count()>=4)
